@@ -152,7 +152,8 @@
 }
 
 .reader rt {
-  font-family: var(--font-sans);
+  /* Same stack as the EPUB. Geist misplaces some tone marks at small sizes (āi → a¯i). */
+  font-family: 'Segoe UI', 'Helvetica Neue', Roboto, Arial, sans-serif;
   font-size: 0.46em;
   font-weight: 400;
   letter-spacing: 0;
@@ -176,10 +177,96 @@
   opacity: 0;
 }
 
-/* Hover/press a hidden aid to peek at it */
-.reader.hide-pinyin .zh:hover rt,
-.reader.hide-english .pair:hover .en {
+/* Peek at a hidden aid: hover on desktop, tap (.revealed) on touch screens */
+@media (hover: hover) {
+  .reader.hide-pinyin .zh:hover rt,
+  .reader.hide-english .pair:hover .en {
+    opacity: 1;
+  }
+}
+
+.reader.hide-pinyin .pair.revealed rt,
+.reader.hide-english .pair.revealed .en {
   opacity: 1;
+}
+
+/* ---------- Full-page reader ---------- */
+
+.reader-page {
+  --reader-scale: 1;
+}
+
+.reader-page .zh {
+  font-size: calc(1.5rem * var(--reader-scale));
+  line-height: 2.45;
+  font-weight: 400;
+  text-align: left;
+}
+
+.reader-page .en {
+  font-size: calc(1rem * var(--reader-scale));
+  line-height: 1.55;
+  margin-top: 0.1em;
+}
+
+.reader-page .para > .pair + .pair {
+  margin-top: 1.15em;
+}
+
+.reader-page .pair {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reader-page .chapter-title {
+  font-size: calc(2.4rem * var(--reader-scale));
+  font-weight: 700;
+  line-height: 2.1;
+}
+
+.reader-page .chapter-subtitle {
+  font-size: calc(1.05rem * var(--reader-scale));
+  letter-spacing: 0.04em;
+}
+
+.reader-page .subhead {
+  padding-top: 1.5em;
+}
+
+.reader-page .part-heading .zh {
+  font-size: calc(1.15rem * var(--reader-scale));
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  color: var(--primary);
+}
+
+.reader-page .part-heading .en {
+  font-family: var(--font-sans);
+  font-size: calc(0.72rem * var(--reader-scale));
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.reader-page .subhead .zh {
+  font-size: calc(1.8rem * var(--reader-scale));
+  font-weight: 700;
+}
+
+.reader-page .untranslated .en {
+  color: var(--foreground);
+  font-size: calc(1.1rem * var(--reader-scale));
+}
+
+@media (max-width: 640px) {
+  .reader-page .zh {
+    font-size: calc(1.32rem * var(--reader-scale));
+    line-height: 2.5;
+  }
+  .reader-page .en {
+    font-size: calc(0.95rem * var(--reader-scale));
+  }
+  .reader-page .chapter-title {
+    font-size: calc(2rem * var(--reader-scale));
+  }
 }
 
 .paper-grain {

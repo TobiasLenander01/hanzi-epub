@@ -7,3 +7,4 @@ frontend/dist/
 books/
 *.epub
 .claude/settings.local.json
+backend/library/

@@ -8,9 +8,9 @@ import zipfile
 
 from lxml import etree
 
-from app import annotate
+from app import annotate, library
 from app.epub_reader import read_epub
-from app.jobs import Job, Selection, _run, select_blocks
+from app.jobs import Job, Selection, run_job, select_blocks
 from app.sentences import split_sentences
 from app.translate import Translator
 from tests.make_sample import build
@@ -37,7 +37,8 @@ def test_sentences():
 def test_full_pipeline(tmp_path, monkeypatch):
     src = tmp_path / "sample.epub"
     build(src)
-    book = read_epub(src.read_bytes())
+    data = src.read_bytes()
+    book = read_epub(data)
     assert book.title == "The Lantern Shop"
     assert [c.title for c in book.chapters][0] == "Chapter One: The Lantern Shop"
     assert book.cover is not None
@@ -48,18 +49,32 @@ def test_full_pipeline(tmp_path, monkeypatch):
         return {u.id: FAKE.get(u.en, "我们一起去长城吧！") for u in batch}
 
     monkeypatch.setattr(Translator, "_call", fake_call)
-    monkeypatch.setattr("app.jobs.OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
 
-    async def go():
+    async def go(chapters):
         job = Job("t1", book.title)
-        await _run(job, book, Selection("chapters", [0, 2]), "simplified", client=None)
+        await run_job(job, book, data, Selection("chapters", chapters), "simplified", client=None)
         return job
 
-    job = asyncio.run(go())
+    job = asyncio.run(go([0, 2]))
     assert job.status == "done", job.error
     assert job.stats["chapters"] == 2
+    assert job.saved == [0, 2]
 
-    with zipfile.ZipFile(job.output) as zf:
+    meta = library.get_meta(job.library_id)
+    assert meta["title_zh"] == "灯笼店"
+    assert [c["key"] for c in meta["chapters"]] == [0, 2]
+    chapter = library.get_chapter(job.library_id, 0)
+    pair = next(p for b in chapter["body"] for p in b["pairs"] if p["en"] == "Mei laughed.")
+    assert pair["zh"] == "美笑了。" and "<rt>měi</rt>" in pair["html"]
+    assert not any(b["kind"] == "heading" for b in chapter["body"])  # duplicate heading folded into the title
+
+    # translating another chapter later merges into the same book
+    assert asyncio.run(go([1])).library_id == job.library_id
+    assert [c["key"] for c in library.get_meta(job.library_id)["chapters"]] == [0, 1, 2]
+    assert library.translated_keys(book.title, book.author)["simplified"] == [0, 1, 2]
+
+    with zipfile.ZipFile(library.epub_path(job.library_id)) as zf:
         names = zf.namelist()
         assert names[0] == "mimetype"
         assert zf.getinfo("mimetype").compress_type == zipfile.ZIP_STORED
@@ -69,7 +84,8 @@ def test_full_pipeline(tmp_path, monkeypatch):
         ch = zf.read("OEBPS/text/ch001.xhtml").decode()
         assert '<p class="en" lang="en" xml:lang="en">Mei laughed.</p>' in ch
         assert "<rt>měi</rt>" in ch
-        assert ch.count("<h1") == 1  # duplicate chapter heading folded into the title
+        assert ch.count("<h1") == 1
+        assert "OEBPS/text/ch003.xhtml" in names
         assert "page-break-inside: avoid" in zf.read("OEBPS/styles/hanzi.css").decode()
 
 

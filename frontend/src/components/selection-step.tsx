@@ -27,20 +27,29 @@ type Props = {
   apiReady: boolean
   starting: boolean
   onConvert: (selection: Selection, script: Script) => void
-  onReset: () => void
+  onReset?: () => void
 }
 
 export function SelectionStep({ book, apiReady, starting, onConvert, onReset }: Props) {
   const [mode, setMode] = useState<'chapters' | 'pages'>('chapters')
-  const [selected, setSelected] = useState<Set<number>>(() => {
-    const first = book.chapters.find((c) => c.word_count >= 300) ?? book.chapters[0]
-    return new Set([first.index])
-  })
-  const [range, setRange] = useState<[number, number]>(() => {
-    const first = book.chapters.find((c) => c.word_count >= 300) ?? book.chapters[0]
-    return [first.start_page, Math.min(first.start_page + 9, book.total_pages)]
-  })
-  const [script, setScript] = useState<Script>('simplified')
+  const [script, setScript] = useState<Script>(() =>
+    book.translated.traditional.length > book.translated.simplified.length ? 'traditional' : 'simplified',
+  )
+  const translated = useMemo(() => new Set(book.translated[script]), [book.translated, script])
+  // Suggest the first real chapter that isn't in the library yet.
+  const suggested = useMemo(() => {
+    const done = new Set(book.translated[script])
+    return (
+      book.chapters.find((c) => c.word_count >= 300 && !done.has(c.index)) ??
+      book.chapters.find((c) => c.word_count >= 300) ??
+      book.chapters[0]
+    )
+  }, [book, script])
+  const [selected, setSelected] = useState<Set<number>>(() => new Set([suggested.index]))
+  const [range, setRange] = useState<[number, number]>(() => [
+    suggested.start_page,
+    Math.min(suggested.start_page + 9, book.total_pages),
+  ])
 
   const words = useMemo(() => {
     if (mode === 'chapters') {
@@ -77,7 +86,7 @@ export function SelectionStep({ book, apiReady, starting, onConvert, onReset }: 
             </TabsList>
           </div>
           <TabsContent value="chapters" className="m-0">
-            <ChapterList chapters={book.chapters} selected={selected} onChange={setSelected} />
+            <ChapterList chapters={book.chapters} translated={translated} selected={selected} onChange={setSelected} />
           </TabsContent>
           <TabsContent value="pages" className="m-0">
             <PageRange book={book} range={range} onChange={setRange} />
@@ -116,7 +125,7 @@ export function SelectionStep({ book, apiReady, starting, onConvert, onReset }: 
               className="gap-2 px-5"
             >
               <Sparkles />
-              {starting ? 'Starting…' : 'Create my reader'}
+              {starting ? 'Starting…' : 'Translate'}
             </Button>
           </div>
         </Card>
@@ -141,7 +150,7 @@ function Stat({ icon, label, hint }: { icon: React.ReactNode; label: string; hin
   )
 }
 
-function BookHeader({ book, onReset }: { book: BookInfo; onReset: () => void }) {
+function BookHeader({ book, onReset }: { book: BookInfo; onReset?: () => void }) {
   return (
     <div className="flex items-center gap-5">
       <div className="flex h-28 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-gradient-to-br from-primary/80 to-primary text-primary-foreground shadow-md">
@@ -160,9 +169,11 @@ function BookHeader({ book, onReset }: { book: BookInfo; onReset: () => void }) 
           <Badge variant="secondary">{book.word_count.toLocaleString()} words</Badge>
         </div>
       </div>
-      <Button variant="ghost" size="sm" onClick={onReset} className="shrink-0 gap-1.5 self-start">
-        <X /> Different book
-      </Button>
+      {onReset && (
+        <Button variant="ghost" size="sm" onClick={onReset} className="shrink-0 gap-1.5 self-start">
+          <X /> Different book
+        </Button>
+      )}
     </div>
   )
 }
@@ -181,10 +192,12 @@ function groupByPart(chapters: Chapter[]): Group[] {
 
 function ChapterList({
   chapters,
+  translated,
   selected,
   onChange,
 }: {
   chapters: Chapter[]
+  translated: Set<number>
   selected: Set<number>
   onChange: (s: Set<number>) => void
 }) {
@@ -211,6 +224,7 @@ function ChapterList({
   }
 
   const real = chapters.filter((c) => c.word_count >= TINY)
+  const remaining = real.filter((c) => !translated.has(c.index))
 
   return (
     <div>
@@ -220,6 +234,11 @@ function ChapterList({
           <span className="hidden sm:inline"> · shift-click to select a range</span>
         </span>
         <div className="flex gap-1">
+          {translated.size > 0 && remaining.length > 0 && (
+            <Button variant="ghost" size="xs" onClick={() => onChange(new Set(remaining.map((c) => c.index)))}>
+              Select remaining
+            </Button>
+          )}
           <Button variant="ghost" size="xs" onClick={() => onChange(new Set(real.map((c) => c.index)))}>
             Select all
           </Button>
@@ -244,7 +263,13 @@ function ChapterList({
                 </button>
               )}
               {group.chapters.map((c) => (
-                <ChapterRow key={c.index} chapter={c} checked={selected.has(c.index)} onToggle={toggle} />
+                <ChapterRow
+                  key={c.index}
+                  chapter={c}
+                  checked={selected.has(c.index)}
+                  inLibrary={translated.has(c.index)}
+                  onToggle={toggle}
+                />
               ))}
             </div>
           )
@@ -272,10 +297,12 @@ function Tick({ state }: { state: 'on' | 'off' | 'some' }) {
 function ChapterRow({
   chapter: c,
   checked,
+  inLibrary,
   onToggle,
 }: {
   chapter: Chapter
   checked: boolean
+  inLibrary: boolean
   onToggle: (index: number, shift: boolean) => void
 }) {
   const tiny = c.word_count < TINY
@@ -303,7 +330,14 @@ function ChapterRow({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="truncate font-medium">{c.title}</span>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-medium">{c.title}</span>
+            {inLibrary && (
+              <Badge variant="secondary" className="shrink-0 gap-1 text-[0.7rem]">
+                <Check className="size-3" /> In library
+              </Badge>
+            )}
+          </span>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
             {tiny ? 'front matter' : `${c.word_count.toLocaleString()} words`}
             <span className="hidden sm:inline">

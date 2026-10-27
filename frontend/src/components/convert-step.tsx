@@ -1,40 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
 import confetti from 'canvas-confetti'
-import { AlertCircle, ArrowLeft, BookPlus, Download, Loader2, Square } from 'lucide-react'
+import { AlertCircle, ArrowLeft, BookOpen, BookPlus, Download, Library, Loader2, Square } from 'lucide-react'
 
 import { AidsToggle, ReaderSurface, SentencePair, type Aids } from '@/components/reader'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
-import { type JobSnapshot, cancelJob, downloadUrl, formatDuration } from '@/lib/api'
+import { type JobSnapshot, cancelJob, formatDuration, libraryEpubUrl } from '@/lib/api'
+import { href } from '@/lib/router'
 import { cn } from '@/lib/utils'
 
 type Props = {
   job: JobSnapshot
   bookTitle: string
   onBack: () => void
-  onNewBook: () => void
 }
 
 const STAGES = [
   { key: 'preparing', label: 'Splitting sentences' },
-  { key: 'translating', label: 'Translating with Claude' },
-  { key: 'packaging', label: 'Adding pinyin & building EPUB' },
-  { key: 'done', label: 'Ready' },
+  { key: 'translating', label: 'Translating & adding pinyin' },
+  { key: 'done', label: 'Saved to your library' },
 ] as const
 
-export function ConvertStep({ job, bookTitle, onBack, onNewBook }: Props) {
+export function ConvertStep({ job, bookTitle, onBack }: Props) {
   const [aids, setAids] = useState<Aids>({ pinyin: true, english: true })
   const stageIndex = STAGES.findIndex((s) => s.key === job.stage)
-  const pct =
-    job.status === 'done'
-      ? 100
-      : job.stage === 'packaging'
-        ? 96
-        : job.total
-          ? Math.max(3, Math.round((job.done / job.total) * 92))
-          : 2
+  const pct = job.status === 'done' ? 100 : job.total ? Math.max(3, Math.round((job.done / job.total) * 98)) : 2
 
   const elapsed = useTicker(job.status === 'running', job.elapsed)
   const rate = job.done > 0 && elapsed > 0 ? job.done / elapsed : 0
@@ -60,7 +52,7 @@ export function ConvertStep({ job, bookTitle, onBack, onNewBook }: Props) {
   return (
     <div className="animate-in fade-in slide-in-from-bottom-3 space-y-6 duration-500">
       {job.status === 'done' ? (
-        <DoneCard job={job} bookTitle={bookTitle} onBack={onBack} onNewBook={onNewBook} />
+        <DoneCard job={job} bookTitle={bookTitle} onBack={onBack} />
       ) : (
         <Card className="gap-5 px-6 py-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -68,16 +60,26 @@ export function ConvertStep({ job, bookTitle, onBack, onNewBook }: Props) {
               <p className="text-sm text-muted-foreground">Creating your reader</p>
               <h2 className="text-xl font-semibold tracking-tight">{bookTitle}</h2>
             </div>
-            <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => cancelJob(job.id)}>
-              <Square className="size-3" /> Cancel
-            </Button>
+            <div className="flex gap-2">
+              {job.saved.length > 0 && (
+                <Button asChild size="sm" className="gap-1.5">
+                  <a href={href.read(job.library_id, job.saved[0])}>
+                    <BookOpen /> Start reading
+                  </a>
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => cancelJob(job.id)}>
+                <Square className="size-3" /> Cancel
+              </Button>
+            </div>
           </div>
           <div className="space-y-2">
             <Progress value={pct} className="h-2.5 transition-all" />
             <div className="flex justify-between text-sm text-muted-foreground tabular-nums">
               <span>
                 {job.total > 0
-                  ? `${job.done.toLocaleString()} of ${job.total.toLocaleString()} lines translated`
+                  ? `${job.done.toLocaleString()} of ${job.total.toLocaleString()} lines translated` +
+                    (job.saved.length ? ` · ${job.saved.length} chapter${job.saved.length === 1 ? '' : 's'} ready to read` : '')
                   : 'Getting started…'}
               </span>
               <span>
@@ -86,7 +88,7 @@ export function ConvertStep({ job, bookTitle, onBack, onNewBook }: Props) {
               </span>
             </div>
           </div>
-          <ol className="grid gap-2 sm:grid-cols-4">
+          <ol className="grid gap-2 sm:grid-cols-3">
             {STAGES.map((s, i) => (
               <li
                 key={s.key}
@@ -145,7 +147,7 @@ export function ConvertStep({ job, bookTitle, onBack, onNewBook }: Props) {
   )
 }
 
-function DoneCard({ job, bookTitle, onBack, onNewBook }: Props) {
+function DoneCard({ job, bookTitle, onBack }: Props) {
   const fired = useRef(false)
   useEffect(() => {
     if (fired.current) return
@@ -180,7 +182,7 @@ function DoneCard({ job, bookTitle, onBack, onNewBook }: Props) {
             ！
           </p>
         </div>
-        <h2 className="text-2xl font-semibold tracking-tight">Your reader is ready</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Added to your library</h2>
         <p className="text-muted-foreground">{bookTitle}</p>
       </div>
 
@@ -193,16 +195,22 @@ function DoneCard({ job, bookTitle, onBack, onNewBook }: Props) {
 
       <div className="relative flex flex-wrap items-center justify-center gap-3">
         <Button size="lg" asChild className="gap-2 px-6">
-          <a href={downloadUrl(job.id)} download={job.filename}>
+          <a href={href.read(job.library_id, job.saved[0])}>
+            <BookOpen /> Start reading
+          </a>
+        </Button>
+        <Button size="lg" variant="outline" asChild className="gap-2">
+          <a href={libraryEpubUrl(job.library_id)} download>
             <Download /> Download EPUB
-            <span className="opacity-70">· {s.size_kb} KB</span>
           </a>
         </Button>
         <Button size="lg" variant="outline" onClick={onBack} className="gap-2">
-          <BookPlus /> Convert more of this book
+          <BookPlus /> Translate more
         </Button>
-        <Button size="lg" variant="ghost" onClick={onNewBook}>
-          New book
+        <Button size="lg" variant="ghost" asChild className="gap-2">
+          <a href={href.library()}>
+            <Library /> Library
+          </a>
         </Button>
       </div>
       {untranslated > 0 && (
@@ -211,7 +219,7 @@ function DoneCard({ job, bookTitle, onBack, onNewBook }: Props) {
         </p>
       )}
       <p className="relative text-xs text-muted-foreground">
-        Works in Apple Books, Google Play Books, Kobo, Calibre, KOReader — or send it to your Kindle.
+        Read it here, or download the EPUB for Apple Books, Google Play Books, Kobo, KOReader or your Kindle.
       </p>
     </Card>
   )

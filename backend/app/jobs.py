@@ -1,23 +1,30 @@
-"""Conversion jobs: selection -> sentences -> translation -> ruby -> EPUB."""
+"""Conversion jobs: selection -> sentences -> translation -> ruby -> library.
+
+Chapters are translated concurrently and each one is saved to the library as soon as it
+is finished, so reading can start while the rest of the book is still being translated.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import re
-import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from . import library
 from .annotate import HAN, ruby_html
 from .epub_reader import Block, Book, Chapter
-from .epub_writer import OutBook, OutSection, Pair, write_epub
 from .sentences import split_sentences
 from .translate import TranslationError, Translator, Unit
 
-OUTPUT_DIR = Path(tempfile.gettempdir()) / "hanzi-epub"
 PREVIEW_LIMIT = 40
+CHAPTERS_IN_FLIGHT = 3
+TINY_CHAPTER = 40  # words; title pages, colophons
+
+_render_lock = threading.Lock()  # jieba isn't safe to run from several threads at once
 
 
 @dataclass
@@ -44,33 +51,61 @@ def _key(text: str) -> str:
 
 @dataclass
 class _Section:
+    key: int  # source chapter index
+    part: str
+    partial: bool  # only some pages of the chapter were selected
     title: Unit
     body: list[tuple[str, list[Unit]]]
 
+    @property
+    def units(self) -> list[Unit]:
+        return [self.title] + [u for _, us in self.body for u in us]
 
-def build_units(book: Book, picked: list[tuple[Chapter, list[Block]]]) -> tuple[Unit, list[_Section], list[Unit]]:
-    units: list[Unit] = []
 
-    def unit(kind: str, en: str) -> Unit:
-        u = Unit(len(units), kind, en)
-        units.append(u)
-        return u
-
-    book_title = unit("title", book.title)
+def build_sections(picked: list[tuple[Chapter, list[Block]]]) -> list[_Section]:
+    ids = itertools.count(1)
     sections = []
     for ch, blocks in picked:
-        title = unit("title", ch.title)
         body: list[tuple[str, list[Unit]]] = []
         for i, b in enumerate(blocks):
             if b.kind == "heading":
                 # the chapter's own heading is already rendered as the title
                 if i < 2 and _key(b.text) and _key(b.text) in _key(ch.title):
                     continue
-                body.append(("heading", [unit("heading", b.text)]))
+                body.append(("heading", [Unit(next(ids), "heading", b.text)]))
             else:
-                body.append(("para", [unit("sentence", s) for s in split_sentences(b.text)]))
-        sections.append(_Section(title, body))
-    return book_title, sections, units
+                body.append(("para", [Unit(next(ids), "sentence", s) for s in split_sentences(b.text)]))
+        title = Unit(next(ids), "title", ch.title)
+        sections.append(_Section(ch.index, ch.part, len(blocks) < len(ch.blocks), title, body))
+    return sections
+
+
+def _html(zh: str) -> str:
+    return ruby_html(zh) if zh else ""
+
+
+def chapter_record(sec: _Section) -> dict:
+    with _render_lock:
+        body = []
+        for kind, units in sec.body:
+            if kind == "heading":
+                u = units[0]
+                body.append({"kind": "heading", "en": u.en, "zh": u.zh, "html": _html(u.zh)})
+            else:
+                body.append({"kind": "para", "pairs": [{"en": u.en, "zh": u.zh, "html": _html(u.zh)} for u in units]})
+        title_html = _html(sec.title.zh)
+    sentences = [u for _, us in sec.body for u in us if u.kind == "sentence"]
+    return {
+        "key": sec.key,
+        "title_en": sec.title.en,
+        "title_zh": sec.title.zh,
+        "title_html": title_html,
+        "part": sec.part,
+        "partial": sec.partial,
+        "sentences": len(sentences),
+        "characters": sum(len(HAN.findall(u.zh)) for u in sentences),
+        "body": body,
+    }
 
 
 @dataclass
@@ -78,14 +113,14 @@ class Job:
     id: str
     book_title: str
     status: str = "running"  # running | done | error | cancelled
-    stage: str = "preparing"  # preparing | translating | packaging | done
+    stage: str = "preparing"  # preparing | translating | done
     total: int = 0
     done: int = 0
     error: str = ""
+    library_id: str = ""
+    saved: list[int] = field(default_factory=list)  # chapter keys already in the library
     preview: list[dict] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
-    output: Path | None = None
-    filename: str = ""
     started: float = field(default_factory=time.time)
     task: asyncio.Task | None = None
     _changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -108,9 +143,10 @@ class Job:
             "total": self.total,
             "done": self.done,
             "error": self.error,
+            "library_id": self.library_id,
+            "saved": sorted(self.saved),
             "preview": self.preview,
             "stats": self.stats,
-            "filename": self.filename,
             "elapsed": round(time.time() - self.started, 1),
         }
 
@@ -118,29 +154,54 @@ class Job:
 JOBS: dict[str, Job] = {}
 
 
-def _safe_filename(title: str) -> str:
-    name = re.sub(r'[\\/:*?"<>|]+', "", title).strip()[:80] or "book"
-    return f"{name} - Hanzi Reader.epub"
-
-
-def start_job(book: Book, sel: Selection, script: str, client) -> Job:
+def start_job(book: Book, source: bytes | None, sel: Selection, script: str, client) -> Job:
     job = Job(uuid.uuid4().hex[:12], book.title)
     JOBS[job.id] = job
-    job.task = asyncio.create_task(_run(job, book, sel, script, client))
+    job.task = asyncio.create_task(run_job(job, book, source, sel, script, client))
     return job
 
 
-async def _run(job: Job, book: Book, sel: Selection, script: str, client) -> None:
+def _first_error(e: BaseException) -> BaseException:
+    while isinstance(e, BaseExceptionGroup):
+        e = e.exceptions[0]
+    return e
+
+
+async def _ensure_library_book(book: Book, source: bytes | None, script: str, translator: Translator) -> str:
+    book_id = library.make_id(book.title, book.author, script)
+    try:
+        library.get_meta(book_id)
+    except library.NotFound:
+        title = Unit(0, "title", book.title)
+        await translator.translate_batch([title])
+        library.ensure_book(
+            book_id,
+            title=book.title,
+            title_zh=title.zh,
+            title_html=_html(title.zh),
+            author=book.author,
+            script=script,
+            source_chapters=sum(1 for c in book.chapters if c.word_count >= TINY_CHAPTER),
+            source=source,
+            cover=book.cover,
+            cover_type=book.cover_type,
+        )
+    return book_id
+
+
+async def run_job(job: Job, book: Book, source: bytes | None, sel: Selection, script: str, client) -> None:
     try:
         picked = select_blocks(book, sel)
         if not picked:
             raise TranslationError("Nothing selected to translate.")
-        book_title, sections, units = build_units(book, picked)
-        job.total = len(units)
+        sections = build_sections(picked)
+        job.total = sum(len(s.units) for s in sections)
         job.stage = "translating"
         job.touch()
 
         translator = Translator(client, script, book.title)
+        job.library_id = await _ensure_library_book(book, source, script, translator)
+        job.touch()
 
         async def on_batch(batch: list[Unit]) -> None:
             job.done += len(batch)
@@ -150,55 +211,39 @@ async def _run(job: Job, book: Book, sel: Selection, script: str, client) -> Non
             job.preview = job.preview[-PREVIEW_LIMIT:]
             job.touch()
 
-        await translator.translate_all(units, on_batch)
+        in_flight = asyncio.Semaphore(CHAPTERS_IN_FLIGHT)
 
-        if not any(u.zh for u in units):
-            raise TranslationError("No sentences could be translated.")
+        async def convert(sec: _Section) -> None:
+            async with in_flight:
+                await translator.translate_all(sec.units, on_batch)
+            if not any(u.zh for u in sec.units):
+                raise TranslationError(f"No sentences in “{sec.title.en}” could be translated.")
+            record = await asyncio.to_thread(chapter_record, sec)
+            library.save_chapter(job.library_id, record)
+            job.saved.append(sec.key)
+            job.touch()
 
-        job.stage = "packaging"
-        job.touch()
+        async with asyncio.TaskGroup() as tg:
+            for sec in sections:
+                tg.create_task(convert(sec))
 
-        out = OutBook(
-            title_en=book.title,
-            title_zh=book_title.zh,
-            author=book.author,
-            lang="zh-Hant" if script == "traditional" else "zh-Hans",
-            sections=[
-                OutSection(
-                    title_en=s.title.en,
-                    title_zh=s.title.zh,
-                    body=[(kind, [Pair(u.en, u.zh) for u in us]) for kind, us in s.body],
-                )
-                for s in sections
-            ],
-            cover=book.cover,
-            cover_type=book.cover_type,
-        )
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        path = OUTPUT_DIR / f"{job.id}.epub"
-        await asyncio.to_thread(write_epub, out, path)
-
-        hanzi = "".join(u.zh for u in units)
-        chars = HAN.findall(hanzi)
-        sentences = [u for u in units if u.kind == "sentence"]
+        sentences = [u for s in sections for _, us in s.body for u in us if u.kind == "sentence"]
+        chars = HAN.findall("".join(u.zh for u in sentences))
         job.stats = {
             "sentences": len(sentences),
             "translated": sum(1 for u in sentences if u.zh),
             "chapters": len(sections),
             "characters": len(chars),
             "unique_characters": len(set(chars)),
-            "size_kb": round(path.stat().st_size / 1024),
         }
-        job.output = path
-        job.filename = _safe_filename(book.title)
         job.stage = "done"
         job.status = "done"
     except asyncio.CancelledError:
         job.status = "cancelled"
         job.touch()
         raise
-    except TranslationError as e:
-        job.status, job.error = "error", str(e)
-    except Exception as e:  # surface unexpected failures to the UI instead of hanging
-        job.status, job.error = "error", f"Unexpected error: {type(e).__name__}: {e}"
+    except Exception as e:  # surface failures to the UI instead of hanging
+        err = _first_error(e)
+        job.status = "error"
+        job.error = str(err) if isinstance(err, TranslationError) else f"Unexpected error: {type(err).__name__}: {err}"
     job.touch()

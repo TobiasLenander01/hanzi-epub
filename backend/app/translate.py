@@ -121,6 +121,7 @@ class Translator:
         self.book_title = book_title
         self.glossary: dict[str, str] = {}
         self.sem = asyncio.Semaphore(CONCURRENCY)
+        self._seeding: asyncio.Task | None = None
 
     def _prompt(self, batch: list[Unit]) -> str:
         lines = []
@@ -192,12 +193,16 @@ class Translator:
         batches = make_batches(units)
         if not batches:
             return
-        # Translate the first batch alone so its names seed the glossary for the rest.
-        await self.translate_batch(batches[0])
-        await on_batch(batches[0])
 
         async def run(batch: list[Unit]):
             await self.translate_batch(batch)
             await on_batch(batch)
 
-        await asyncio.gather(*(run(b) for b in batches[1:]))
+        # The book's very first batch runs alone so its names seed the glossary for
+        # everything after it, including other chapters translating concurrently.
+        if self._seeding is None:
+            self._seeding = asyncio.ensure_future(run(batches.pop(0)))
+        await self._seeding
+        async with asyncio.TaskGroup() as tg:
+            for b in batches:
+                tg.create_task(run(b))
