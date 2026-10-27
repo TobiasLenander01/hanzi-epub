@@ -1,0 +1,263 @@
+@charset "utf-8";
+@namespace epub "http://www.idpf.org/2007/ops";
+
+/*
+ * Hanzi Reader typography.
+ *
+ * Reading order is deliberate: the characters are the largest, darkest thing on the
+ * page; pinyin sits above in small grey type, the English sits below in smaller grey
+ * type. The eye lands on the hanzi first and only drifts to the aids when it needs them.
+ *
+ * Hanzi inherit the reader's text colour so night / sepia themes still work; the aids
+ * use a mid grey that stays legible on white, sepia and black backgrounds.
+ */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0 3%;
+  line-height: 1.5;
+  widows: 2;
+  orphans: 2;
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+/* ---------- Sentence pairs ---------- */
+
+.para {
+  margin: 0 0 1.9em 0;
+}
+
+.pair {
+  display: block;
+  margin: 0 0 1.05em 0;
+  /* keep pinyin + hanzi + English together on one page / screen */
+  page-break-inside: avoid;
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-before: auto;
+}
+
+.pair:last-child {
+  margin-bottom: 0;
+}
+
+.zh {
+  font-family: "Noto Serif CJK SC", "Noto Serif SC", "Source Han Serif SC", "Songti SC",
+    "STSong", "SimSun", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", serif;
+  font-size: 1.32em;
+  font-weight: normal;
+  /* generous leading leaves room for the ruby line without overlap */
+  line-height: 2.35;
+  margin: 0;
+  padding: 0;
+  text-indent: 0;
+  /* justification stretches ruby awkwardly on some engines */
+  text-align: left;
+  letter-spacing: 0.03em;
+  word-break: normal;
+  line-break: strict;
+}
+
+:root[lang="zh-Hant"] .zh {
+  font-family: "Noto Serif CJK TC", "Noto Serif TC", "Source Han Serif TC", "Songti TC",
+    "PMingLiU", "PingFang TC", "Microsoft JhengHei", serif;
+}
+
+/* ---------- Ruby / pinyin ---------- */
+
+ruby {
+  ruby-align: center;
+  ruby-position: over;
+  -webkit-ruby-position: before;
+  -epub-ruby-position: over;
+  text-indent: 0;
+}
+
+rt {
+  font-family: "Helvetica Neue", "Avenir Next", "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 0.46em;
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: center;
+  ruby-align: center;
+  color: #8c8c8c;
+  -webkit-text-emphasis: none;
+}
+
+/* ---------- English ---------- */
+
+.en {
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+  font-size: 0.8em;
+  font-style: normal;
+  line-height: 1.45;
+  color: #8c8c8c;
+  margin: 0.05em 0 0 0;
+  padding: 0;
+  text-indent: 0;
+  text-align: left;
+}
+
+.en.solo {
+  font-size: 1em;
+  color: inherit;
+}
+
+/* ---------- Chapter & section headings ---------- */
+
+.chapter-head {
+  margin: 1.5em 0 2.4em 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1.zh,
+h2.zh {
+  font-weight: bold;
+  line-height: 2.2;
+  margin: 0;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1.zh {
+  font-size: 1.75em;
+}
+
+h2.zh {
+  font-size: 1.4em;
+}
+
+h1.zh rt,
+h2.zh rt {
+  font-weight: normal;
+}
+
+.chapter-en,
+.subhead-en {
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 0.9em;
+  letter-spacing: 0.04em;
+  color: #8c8c8c;
+  margin: 0.15em 0 0 0;
+  text-indent: 0;
+}
+
+.chapter-en.solo,
+.subhead-en.solo {
+  font-size: 1.4em;
+  color: inherit;
+}
+
+.subhead {
+  margin: 2em 0 1.4em 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+/* ---------- Title page ---------- */
+
+.titlepage {
+  text-align: center;
+  margin-top: 18%;
+}
+
+.titlepage .zh,
+.titlepage .en {
+  text-align: center;
+}
+
+.book-title {
+  font-size: 2em;
+}
+
+.book-title-en {
+  font-family: Georgia, serif;
+  font-size: 1.15em;
+  color: #8c8c8c;
+  margin: 0.3em 0 0 0;
+}
+
+.book-author {
+  font-family: Georgia, serif;
+  font-size: 0.95em;
+  font-style: italic;
+  color: #8c8c8c;
+  margin: 1.2em 0 0 0;
+}
+
+.howto {
+  margin: 3.5em auto 0 auto;
+  max-width: 26em;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.howto-en {
+  margin-top: 0.4em;
+}
+
+/* ---------- Cover ---------- */
+
+.cover {
+  margin: 0;
+  padding: 0;
+  text-align: center;
+  height: 100%;
+}
+
+.cover img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* ---------- Table of contents ---------- */
+
+nav#toc ol {
+  list-style: none;
+  padding: 0;
+}
+
+nav#toc li {
+  margin: 0.6em 0;
+}
+
+/* ---------- Narrow screens (phones) ---------- */
+
+@media screen and (max-width: 30em) {
+  body {
+    padding: 0 1%;
+  }
+  .zh {
+    font-size: 1.25em;
+    line-height: 2.45;
+  }
+  .en {
+    font-size: 0.85em;
+  }
+}
+
+/* Dark themes on readers that honour it: lift the aids slightly */
+@media (prefers-color-scheme: dark) {
+  rt,
+  .en,
+  .chapter-en,
+  .subhead-en,
+  .book-title-en,
+  .book-author {
+    color: #9a9a9a;
+  }
+}
