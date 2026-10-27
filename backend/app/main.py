@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI, File, HTTPException, UploadFile  # noqa: E402
+from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, Response, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
@@ -37,6 +38,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Hanzi Reader", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1024)  # chapters are hundreds of KB of JSON
 BOOKS: OrderedDict[str, tuple[Book, bytes]] = OrderedDict()  # uploads being set up in the wizard
 _client = None
 _cred_cache: tuple[float, bool, str] | None = None
@@ -105,7 +107,7 @@ async def library_book(book_id: str):
 @app.get("/api/library/{book_id}/chapters/{key}")
 async def library_chapter(book_id: str, key: int):
     try:
-        return library.get_chapter(book_id, key)
+        return Response(library.chapter_json_for_web(book_id, key), media_type="application/json")
     except library.NotFound:
         raise HTTPException(404, "That chapter hasn't been translated yet.")
 

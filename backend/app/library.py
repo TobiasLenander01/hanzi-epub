@@ -79,6 +79,18 @@ def get_chapter(book_id: str, key: int) -> dict:
     return chapter
 
 
+def chapter_json_for_web(book_id: str, key: int) -> str:
+    """The chapter's JSON without the <rp> fallback parentheses. Browsers never show them,
+    but they are two of every three elements inside the ruby markup, and a long chapter
+    has tens of thousands of them. The EPUB export keeps them for e-readers without ruby."""
+    path = _dir(book_id) / "chapters" / f"{key:04d}.json"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise NotFound(f"{book_id}/{key}")
+    return text.replace("<rp>(</rp>", "").replace("<rp>)</rp>", "")
+
+
 def ensure_book(
     book_id: str,
     *,

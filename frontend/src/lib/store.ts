@@ -66,9 +66,11 @@ export const readerSettings = createStore<ReaderSettings>('hanzi-reader-settings
 
 // ---------- Reading progress ----------
 
-export type Progress = { key: number; fraction: number; at: number }
+/** Where a book was left: chapter key and paragraph index (`block`, absent in older saves). */
+export type Progress = { key: number; block?: number; fraction: number; at: number }
 export const progressStore = createStore<Record<string, Progress>>('hanzi-progress', () => ({}))
 
-export function saveProgress(bookId: string, key: number, fraction: number) {
-  progressStore.set((all) => ({ ...all, [bookId]: { key, fraction, at: Date.now() } }))
+export function saveProgress(bookId: string, key: number, block: number, blocks: number) {
+  const fraction = blocks > 0 ? block / blocks : 0
+  progressStore.set((all) => ({ ...all, [bookId]: { key, block, fraction, at: Date.now() } }))
 }

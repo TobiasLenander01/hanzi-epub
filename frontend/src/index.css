@@ -158,7 +158,6 @@
   font-weight: 400;
   letter-spacing: 0;
   color: var(--muted-foreground);
-  transition: opacity 200ms ease;
 }
 
 .reader .en {
@@ -166,28 +165,32 @@
   font-size: 0.95rem;
   line-height: 1.5;
   color: var(--muted-foreground);
-  transition: opacity 200ms ease;
 }
 
+/*
+ * Hide aids with visibility, not opacity: opacity below 1 gives each <rt> its own stacking
+ * context, and rebuilding ~14,000 of them made toggling pinyin take seconds on long chapters.
+ * Like opacity, visibility keeps the space, so the text doesn't reflow.
+ */
 .reader.hide-pinyin rt {
-  opacity: 0;
+  visibility: hidden;
 }
 
 .reader.hide-english .en {
-  opacity: 0;
+  visibility: hidden;
 }
 
 /* Peek at a hidden aid: hover on desktop, tap (.revealed) on touch screens */
 @media (hover: hover) {
   .reader.hide-pinyin .zh:hover rt,
   .reader.hide-english .pair:hover .en {
-    opacity: 1;
+    visibility: visible;
   }
 }
 
 .reader.hide-pinyin .pair.revealed rt,
 .reader.hide-english .pair.revealed .en {
-  opacity: 1;
+  visibility: visible;
 }
 
 /* ---------- Full-page reader ---------- */
@@ -215,6 +218,21 @@
 
 .reader-page .pair {
   -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Only lay out and paint the paragraphs near the screen. A chapter can hold 50,000 elements of
+ * ruby markup; without this, every resize, text-size change or aid toggle re-lays out all of them.
+ * `auto` remembers each block's real height once it has been rendered.
+ */
+.reader-page [data-block] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+  scroll-margin-top: 5rem;
+}
+
+.reader-page .subhead[data-block] {
+  contain-intrinsic-size: auto 140px;
 }
 
 .reader-page .chapter-title {

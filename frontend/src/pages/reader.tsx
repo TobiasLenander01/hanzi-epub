@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, BookPlus, ChevronLeft, List, Loader2, Minus, Plus, Type } from 'lucide-react'
 
 import { ThemeToggle } from '@/components/chrome'
@@ -69,35 +69,51 @@ function Reader({ meta, chapterKey, chapter }: { meta: BookMeta; chapterKey: num
   const next = meta.chapters[index + 1]
   const summary = meta.chapters[index]
   const [barHidden, setBarHidden] = useState(false)
-  const [scrolled, setScrolled] = useState(0)
+  const mainRef = useRef<HTMLElement>(null)
+  const progressRef = useRef<HTMLDivElement>(null)
 
-  // Restore the saved scroll position once the chapter is on screen.
+  // Restore the reading position once the chapter is on screen. Positions are saved as a
+  // paragraph index rather than a scroll offset: off-screen paragraphs aren't laid out
+  // (content-visibility), so the page height is partly an estimate.
   useLayoutEffect(() => {
     if (!chapter) return
+    const blocks = mainRef.current?.querySelectorAll<HTMLElement>('[data-block]') ?? []
     const saved = progressStore.get()[meta.id]
-    const fraction = saved?.key === chapter.key ? saved.fraction : 0
-    const max = document.documentElement.scrollHeight - window.innerHeight
-    window.scrollTo({ top: fraction > 0.01 ? fraction * max : 0 })
-    saveProgress(meta.id, chapter.key, fraction)
+    const block = saved?.key === chapter.key ? (saved.block ?? Math.round(saved.fraction * blocks.length)) : 0
+    if (block > 0 && blocks[block]) blocks[block].scrollIntoView({ block: 'start' })
+    else window.scrollTo({ top: 0 })
+    saveProgress(meta.id, chapter.key, block, blocks.length)
   }, [chapter, meta.id])
 
-  // Track reading position, and tuck the top bar away while scrolling down.
+  // Track reading position, and tuck the top bar away while scrolling down. This runs at most
+  // once per frame and touches the DOM directly, so scrolling never re-renders the chapter.
   useEffect(() => {
     if (!chapter) return
+    const blocks = [...(mainRef.current?.querySelectorAll<HTMLElement>('[data-block]') ?? [])]
     let lastY = window.scrollY
+    let hidden = false
+    let frame = 0
     let timer = 0
-    const onScroll = () => {
+    const update = () => {
+      frame = 0
       const y = window.scrollY
       const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight)
-      setScrolled(Math.min(1, y / max))
-      if (Math.abs(y - lastY) > 6) setBarHidden(y > lastY && y > 120)
-      lastY = y
+      progressRef.current?.style.setProperty('transform', `scaleX(${Math.min(1, y / max)})`)
+      if (Math.abs(y - lastY) > 6) {
+        const hide = y > lastY && y > 120
+        if (hide !== hidden) setBarHidden((hidden = hide))
+        lastY = y
+      }
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => saveProgress(meta.id, chapter.key, Math.min(1, y / max)), 250)
+      timer = window.setTimeout(() => saveProgress(meta.id, chapter.key, firstVisible(blocks), blocks.length), 300)
+    }
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update)
     }
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => {
       window.removeEventListener('scroll', onScroll)
+      cancelAnimationFrame(frame)
       window.clearTimeout(timer)
     }
   }, [chapter, meta.id])
@@ -147,11 +163,12 @@ function Reader({ meta, chapterKey, chapter }: { meta: BookMeta; chapterKey: num
           <ThemeToggle />
         </div>
         <div className="absolute inset-x-0 -bottom-px h-0.5">
-          <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${scrolled * 100}%` }} />
+          <div ref={progressRef} className="h-full origin-left bg-primary" style={{ transform: 'scaleX(0)' }} />
         </div>
       </header>
 
       <main
+        ref={mainRef}
         onClick={onTap}
         className={cn(
           'reader reader-page mx-auto max-w-[42rem] px-5 pt-10 pb-16 sm:px-8 sm:pt-16',
@@ -174,6 +191,18 @@ function Reader({ meta, chapterKey, chapter }: { meta: BookMeta; chapterKey: num
   )
 }
 
+/** Index of the first block whose bottom edge is below the top bar. */
+function firstVisible(blocks: HTMLElement[]): number {
+  let lo = 0
+  let hi = blocks.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (blocks[mid].getBoundingClientRect().bottom > 72) hi = mid
+    else lo = mid + 1
+  }
+  return Math.max(0, lo)
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 /** A part title ("PART ONE: …") that opens the chapter body belongs above the chapter title. */
@@ -185,7 +214,7 @@ function splitPartHeading(chapter: ChapterData) {
   return { partHeading: null, body: chapter.body }
 }
 
-function ChapterHeader({ chapter }: { chapter: ChapterData }) {
+const ChapterHeader = memo(function ChapterHeader({ chapter }: { chapter: ChapterData }) {
   const { partHeading } = splitPartHeading(chapter)
   return (
     <header className="mb-12 sm:mb-16">
@@ -203,20 +232,21 @@ function ChapterHeader({ chapter }: { chapter: ChapterData }) {
       <p className="en chapter-subtitle">{chapter.title_en}</p>
     </header>
   )
-}
+})
 
-function ChapterBody({ chapter }: { chapter: ChapterData }) {
+// Memoized: a chapter is tens of thousands of elements, and nothing about it changes while reading.
+const ChapterBody = memo(function ChapterBody({ chapter }: { chapter: ChapterData }) {
   const { body } = splitPartHeading(chapter)
   return (
     <div className="space-y-[1.9em]">
       {body.map((block, i) =>
         block.kind === 'heading' ? (
-          <div key={i} className="pair subhead">
+          <div key={i} data-block={i} className="pair subhead">
             {block.zh && <h2 className="zh" dangerouslySetInnerHTML={{ __html: block.html }} />}
             <p className="en">{block.en}</p>
           </div>
         ) : (
-          <div key={i} className="para">
+          <div key={i} data-block={i} className="para">
             {block.pairs.map((p, j) =>
               p.zh ? (
                 <div key={j} className="pair">
@@ -234,7 +264,7 @@ function ChapterBody({ chapter }: { chapter: ChapterData }) {
       )}
     </div>
   )
-}
+})
 
 function ChapterFooter({
   meta,
